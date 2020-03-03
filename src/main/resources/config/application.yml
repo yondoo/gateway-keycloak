@@ -146,11 +146,13 @@ spring:
       client:
         provider:
           oidc:
-            issuer-uri: http://localhost:9080/auth/realms/jhipster
+            issuer-uri: http://localhost:8180/auth/realms/gateway
+            auth-server-url: http://localhost:8180/auth
+            realm: gateway
         registration:
           oidc:
-            client-id: web_app
-            client-secret: web_app
+            client-id: restful-api
+            client-secret: 4af4de4e-2807-470f-a084-30180194045b
 
 server:
   servlet:
@@ -198,6 +200,10 @@ jhipster:
       audience:
         - account
         - api://default
+        - restful-api
+  gateway:
+    authorized-microservices-endpoints:
+      app1: /api,/v2/api-docs
 # ===================================================================
 # Application specific properties
 # Add your own application properties here, see the ApplicationProperties class
@@ -208,3 +214,16 @@ jhipster:
 # ===================================================================
 
 # application:
+keycloak:
+  realm: gateway
+  auth-server-url: http://localhost:8180/auth
+  resource: restful-api
+  #  policy-enforcer-config:
+  #    enforcement-mode: enforcing
+  #  public-client: true
+  #  bearer-only: true
+  credentials:
+    secret: 4af4de4e-2807-470f-a084-30180194045b
+#    use-resource-role-mappings: true
+#    policy-enforcer-config:
+#      lazy-load-paths: true

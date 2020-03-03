@@ -1,18 +1,24 @@
 package gateway.gateway.accesscontrol;
 
-import io.github.jhipster.config.JHipsterProperties;
-
-import java.util.List;
-import java.util.Map;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.cloud.netflix.zuul.filters.Route;
-import org.springframework.cloud.netflix.zuul.filters.RouteLocator;
-import org.springframework.http.HttpStatus;
-
 import com.netflix.zuul.ZuulFilter;
 import com.netflix.zuul.context.RequestContext;
+import gateway.security.KeycloakUtils;
+import gateway.security.oauth2.AuthorizationHeaderUtil;
+import io.github.jhipster.config.JHipsterProperties;
+import org.keycloak.authorization.client.Configuration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.configurationprocessor.json.JSONException;
+import org.springframework.cloud.netflix.zuul.filters.Route;
+import org.springframework.cloud.netflix.zuul.filters.RouteLocator;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Zuul filter for restricting access to backend micro-services endpoints.
@@ -25,9 +31,27 @@ public class AccessControlFilter extends ZuulFilter {
 
     private final JHipsterProperties jHipsterProperties;
 
-    public AccessControlFilter(RouteLocator routeLocator, JHipsterProperties jHipsterProperties) {
+    private final AuthorizationHeaderUtil headerUtil;
+
+    private final JwtDecoder jwtDecoder;
+
+    @Value("${spring.security.oauth2.client.provider.oidc.auth-server-url}")
+    private String authServerUrl;
+
+    @Value("${spring.security.oauth2.client.provider.oidc.realm}")
+    private String realm;
+
+    @Value("${spring.security.oauth2.client.registration.oidc.client-id}")
+    private String clientId;
+
+    @Value("${spring.security.oauth2.client.registration.oidc.client-secret}")
+    private String clientSecret;
+
+    public AccessControlFilter(RouteLocator routeLocator, JHipsterProperties jHipsterProperties, AuthorizationHeaderUtil headerUtil, JwtDecoder jwtDecoder) {
         this.routeLocator = routeLocator;
         this.jHipsterProperties = jHipsterProperties;
+        this.headerUtil = headerUtil;
+        this.jwtDecoder = jwtDecoder;
     }
 
     @Override
@@ -47,6 +71,7 @@ public class AccessControlFilter extends ZuulFilter {
     public boolean shouldFilter() {
         String requestUri = RequestContext.getCurrentContext().getRequest().getRequestURI();
         String contextPath = RequestContext.getCurrentContext().getRequest().getContextPath();
+        String httpMethod = RequestContext.getCurrentContext().getRequest().getMethod();
 
         // If the request Uri does not start with the path of the authorized endpoints, we block the request
         for (Route route : routeLocator.getRoutes()) {
@@ -56,13 +81,17 @@ public class AccessControlFilter extends ZuulFilter {
             // If this route correspond to the current request URI
             // We do a substring to remove the "**" at the end of the route URL
             if (requestUri.startsWith(serviceUrl.substring(0, serviceUrl.length() - 2))) {
-				return !isAuthorizedRequest(serviceUrl, serviceName, requestUri);
+                try {
+                    return !isAuthorizedRequest(serviceUrl, serviceName, requestUri, httpMethod);
+                } catch (JSONException e) {
+                    e.printStackTrace();
+                }
             }
         }
         return true;
     }
 
-    private boolean isAuthorizedRequest(String serviceUrl, String serviceName, String requestUri) {
+    private boolean isAuthorizedRequest(String serviceUrl, String serviceName, String requestUri, String httpMethod) throws JSONException {
         Map<String, List<String>> authorizedMicroservicesEndpoints = jHipsterProperties.getGateway()
             .getAuthorizedMicroservicesEndpoints();
 
@@ -70,7 +99,7 @@ public class AccessControlFilter extends ZuulFilter {
         if (authorizedMicroservicesEndpoints.get(serviceName) == null) {
             log.debug("Access Control: allowing access for {}, as no access control policy has been set up for " +
                 "service: {}", requestUri, serviceName);
-            return true;
+            return isAuthorizedRequest(requestUri, httpMethod);
         } else {
             List<String> authorizedEndpoints = authorizedMicroservicesEndpoints.get(serviceName);
 
@@ -81,11 +110,21 @@ public class AccessControlFilter extends ZuulFilter {
                 if (requestUri.startsWith(gatewayEndpoint)) {
                     log.debug("Access Control: allowing access for {}, as it matches the following authorized " +
                         "microservice endpoint: {}", requestUri, gatewayEndpoint);
-                    return true;
+                    return isAuthorizedRequest(requestUri, httpMethod);
                 }
             }
         }
         return false;
+    }
+
+    private boolean isAuthorizedRequest(String requestUri, String httpMethod) throws JSONException {
+        Map<String, Object> clientCredentials = new HashMap<>();
+        clientCredentials.put("secret", clientSecret);
+
+        Configuration configuration = new Configuration(authServerUrl, realm, clientId, clientCredentials, null);
+        KeycloakUtils keycloakUtils = new KeycloakUtils(configuration, headerUtil, jwtDecoder);
+
+        return keycloakUtils.isAuthorized(requestUri, httpMethod);
     }
 
     @Override
